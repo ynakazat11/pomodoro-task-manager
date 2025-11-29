@@ -158,25 +158,23 @@ def start(task_ref: str):
     try:
         timer.run_timer(minutes=25, task_title=target_task.title)
         
-        # Timer finished
+        # Timer finished naturally
         target_task.completed_tomatoes += 1
         console.print(f"[bold green]One tomato added to '{target_task.title}'[/bold green]")
         
-        # Ask if done
-        is_done = typer.confirm("Did you finish this task?")
-        if is_done:
-            target_task.status = TaskStatus.DONE
-            target_task.completed_at = datetime.now().isoformat()
-            console.print(f"[bold green]Task marked as DONE![/bold green]")
-        else:
-            # Ask if want to continue immediately? Or just exit.
-            # Usually Pomodoro implies a break.
-            console.print("[yellow]Take a short break![/yellow]")
-            
-        storage.save_data(tasks, projects)
-        
     except KeyboardInterrupt:
-        console.print("\n[bold red]Timer cancelled.[/bold red]")
+        console.print("\n[bold yellow]Timer stopped.[/bold yellow]")
+    
+    # Always ask if done, whether finished or stopped
+    is_done = typer.confirm("Did you finish this task?")
+    if is_done:
+        target_task.status = TaskStatus.DONE
+        target_task.completed_at = datetime.now().isoformat()
+        console.print(f"[bold green]Task marked as DONE![/bold green]")
+    else:
+        console.print("[yellow]Task status remains 'in_progress'.[/yellow]")
+        
+    storage.save_data(tasks, projects)
 
 @app.command()
 def stats():

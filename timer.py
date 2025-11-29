@@ -27,6 +27,8 @@ def run_timer(minutes: int = 25, task_title: str = "Focus Time"):
     
     task_id = progress.add_task(f"[bold cyan]{task_title}", total=seconds, time_remaining=str(timedelta(seconds=seconds)))
     
+    console.print("[dim]Press Ctrl+C to stop timer[/dim]")
+    
     with Live(Panel(progress, title="Pomodoro Timer", border_style="green"), refresh_per_second=4) as live:
         while not progress.finished:
             time.sleep(1)
