@@ -14,6 +14,9 @@ import sys
 app = typer.Typer()
 console = Console()
 
+# Global map to store index -> task_id for the current session
+TASK_INDEX_MAP = {}
+
 @app.command()
 def ingest(text: str):
     """
@@ -53,15 +56,23 @@ def ingest(text: str):
         
         # Show summary
         table = Table(title="New Tasks")
+        table.add_column("Index", style="dim")
+        table.add_column("Project", style="green")
         table.add_column("Title", style="cyan")
         table.add_column("Tomatoes", style="magenta")
-        table.add_column("Project", style="green")
         
         project_map = {p.id: p.name for p in final_projects}
         
-        for t in new_tasks:
+        # We can't easily give them a permanent index here without reloading everything and sorting
+        # But for "New Tasks" display, we can just show them as 1..N relative to this batch, 
+        # OR we can just show "-" since they are not in the main list yet.
+        # User asked for "Task Index", implying they want to be able to reference them?
+        # Let's just show "-" for now as they need to run 'list' to get the actionable index.
+        # Or better, we can just list everything after ingest.
+        
+        for i, t in enumerate(new_tasks, 1):
             p_name = project_map.get(t.project_id, "Unknown")
-            table.add_row(t.title, str(t.estimated_tomatoes), p_name)
+            table.add_row("-", p_name, t.title, str(t.estimated_tomatoes))
             
         console.print(table)
 
@@ -73,41 +84,69 @@ def list():
     """
     List all pending tasks.
     """
+    global TASK_INDEX_MAP
+    TASK_INDEX_MAP.clear()
+    
     tasks, projects = storage.load_data()
     project_map = {p.id: p.name for p in projects}
     
     table = Table(title="Pending Tasks")
+    table.add_column("Index", style="bold white")
     table.add_column("ID", style="dim")
     table.add_column("Title", style="cyan")
     table.add_column("Tomatoes", style="magenta")
     table.add_column("Status", style="yellow")
     table.add_column("Project", style="green")
     
+    current_index = 1
     # Sort by project maybe?
     for t in tasks:
         if t.status != TaskStatus.ARCHIVED:
             p_name = project_map.get(t.project_id, "No Project")
             status_color = "green" if t.status == TaskStatus.DONE else "yellow"
-            table.add_row(t.id[:8], t.title, f"{t.completed_tomatoes}/{t.estimated_tomatoes}", f"[{status_color}]{t.status.value}[/{status_color}]", p_name)
+            
+            TASK_INDEX_MAP[str(current_index)] = t.id
+            
+            table.add_row(
+                str(current_index),
+                t.id[:8], 
+                t.title, 
+                f"{t.completed_tomatoes}/{t.estimated_tomatoes}", 
+                f"[{status_color}]{t.status.value}[/{status_color}]", 
+                p_name
+            )
+            current_index += 1
             
     console.print(table)
 
 @app.command()
-def start(task_id_prefix: str):
+def start(task_ref: str):
     """
     Start a Pomodoro timer for a specific task.
+    Accepts Task ID (prefix) OR Task Index (if list was run previously).
     """
     tasks, projects = storage.load_data()
     
-    # Find task by ID prefix
-    target_task = None
-    for t in tasks:
-        if t.id.startswith(task_id_prefix):
-            target_task = t
-            break
+    target_task_id = None
+    
+    # Check if input is an index
+    if task_ref.isdigit() and task_ref in TASK_INDEX_MAP:
+        target_task_id = TASK_INDEX_MAP[task_ref]
+    else:
+        # Assume it's an ID prefix
+        for t in tasks:
+            if t.id.startswith(task_ref):
+                target_task_id = t.id
+                break
+    
+    if not target_task_id:
+        console.print(f"[bold red]Task '{task_ref}' not found. Try running 'list' first.[/bold red]")
+        return
+        
+    target_task = next((t for t in tasks if t.id == target_task_id), None)
             
     if not target_task:
-        console.print(f"[bold red]Task with ID prefix '{task_id_prefix}' not found.[/bold red]")
+        console.print(f"[bold red]Task with ID '{target_task_id}' not found.[/bold red]")
         return
 
     console.print(f"[bold]Starting Pomodoro for:[/bold] {target_task.title}")
@@ -235,6 +274,82 @@ def archive(days: int = 0):
     storage.append_to_archive(tasks_to_archive)
     
     console.print(f"[bold green]Archived {len(tasks_to_archive)} tasks.[/bold green]")
+    console.print(f"[bold green]Archived {len(tasks_to_archive)} tasks.[/bold green]")
+
+@app.command()
+def delete(task_ref: str):
+    """
+    Delete a task by ID or Index.
+    """
+    tasks, projects = storage.load_data()
+    
+    target_task_id = None
+    
+    # Check if input is an index
+    if task_ref.isdigit() and task_ref in TASK_INDEX_MAP:
+        target_task_id = TASK_INDEX_MAP[task_ref]
+    else:
+        # Assume it's an ID prefix
+        for t in tasks:
+            if t.id.startswith(task_ref):
+                target_task_id = t.id
+                break
+    
+    if not target_task_id:
+        console.print(f"[bold red]Task '{task_ref}' not found. Try running 'list' first.[/bold red]")
+        return
+        
+    # Filter out the task
+    target_task = next((t for t in tasks if t.id == target_task_id), None)
+    
+    if not target_task:
+        console.print(f"[bold red]Task not found.[/bold red]")
+        return
+        
+    confirm = typer.confirm(f"Are you sure you want to delete '{target_task.title}'?")
+    if not confirm:
+        console.print("[yellow]Deletion cancelled.[/yellow]")
+        return
+
+    new_tasks = [t for t in tasks if t.id != target_task_id]
+        
+    storage.save_data(new_tasks, projects)
+    console.print(f"[bold green]Task deleted.[/bold green]")
+
+@app.command()
+def complete(task_ref: str):
+    """
+    Mark a task as done by ID or Index.
+    """
+    tasks, projects = storage.load_data()
+    
+    target_task_id = None
+    
+    # Check if input is an index
+    if task_ref.isdigit() and task_ref in TASK_INDEX_MAP:
+        target_task_id = TASK_INDEX_MAP[task_ref]
+    else:
+        # Assume it's an ID prefix
+        for t in tasks:
+            if t.id.startswith(task_ref):
+                target_task_id = t.id
+                break
+    
+    if not target_task_id:
+        console.print(f"[bold red]Task '{task_ref}' not found. Try running 'list' first.[/bold red]")
+        return
+        
+    target_task = next((t for t in tasks if t.id == target_task_id), None)
+            
+    if not target_task:
+        console.print(f"[bold red]Task with ID '{target_task_id}' not found.[/bold red]")
+        return
+        
+    target_task.status = TaskStatus.DONE
+    target_task.completed_at = datetime.now().isoformat()
+    
+    storage.save_data(tasks, projects)
+    console.print(f"[bold green]Task '{target_task.title}' marked as DONE![/bold green]")
 
 @app.command()
 def interactive():
@@ -250,9 +365,11 @@ def interactive():
         console.print("3. [cyan]Start Task[/cyan]")
         console.print("4. [cyan]Check Progress[/cyan]")
         console.print("5. [cyan]Archive Completed[/cyan]")
-        console.print("6. [red]Exit[/red]")
+        console.print("6. [cyan]Mark Task Done[/cyan]")
+        console.print("7. [red]Delete Task[/red]")
+        console.print("8. [red]Exit[/red]")
         
-        choice = Prompt.ask("What would you like to do?", choices=["1", "2", "3", "4", "5", "6"], default="2")
+        choice = Prompt.ask("What would you like to do?", choices=["1", "2", "3", "4", "5", "6", "7", "8"], default="2")
         
         if choice == "1":
             text = Prompt.ask("Enter your brain dump")
@@ -273,6 +390,16 @@ def interactive():
             except ValueError:
                 console.print("[red]Invalid number[/red]")
         elif choice == "6":
+            # List tasks first
+            list()
+            task_ref = Prompt.ask("Enter Task Index or ID to mark done")
+            complete(task_ref)
+        elif choice == "7":
+            # List tasks first
+            list()
+            task_ref = Prompt.ask("Enter Task Index or ID to delete")
+            delete(task_ref)
+        elif choice == "8":
             console.print("[bold blue]Goodbye![/bold blue]")
             break
 
