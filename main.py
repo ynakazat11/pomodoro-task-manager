@@ -8,6 +8,8 @@ import storage
 import timer
 from models import TaskStatus, Task
 from rich.panel import Panel
+from rich.prompt import Prompt
+import sys
 
 app = typer.Typer()
 console = Console()
@@ -234,5 +236,48 @@ def archive(days: int = 0):
     
     console.print(f"[bold green]Archived {len(tasks_to_archive)} tasks.[/bold green]")
 
+@app.command()
+def interactive():
+    """
+    Start the interactive session.
+    """
+    console.print(Panel.fit("[bold blue]Welcome to Pomodoro Task Manager[/bold blue]", border_style="blue"))
+    
+    while True:
+        console.print("\n[bold]Main Menu[/bold]")
+        console.print("1. [cyan]Ingest Tasks[/cyan] (Brain Dump)")
+        console.print("2. [cyan]List Tasks[/cyan]")
+        console.print("3. [cyan]Start Task[/cyan]")
+        console.print("4. [cyan]Check Progress[/cyan]")
+        console.print("5. [cyan]Archive Completed[/cyan]")
+        console.print("6. [red]Exit[/red]")
+        
+        choice = Prompt.ask("What would you like to do?", choices=["1", "2", "3", "4", "5", "6"], default="2")
+        
+        if choice == "1":
+            text = Prompt.ask("Enter your brain dump")
+            ingest(text)
+        elif choice == "2":
+            list()
+        elif choice == "3":
+            # List tasks first to see IDs
+            list()
+            task_id = Prompt.ask("Enter Task ID (or prefix)")
+            start(task_id)
+        elif choice == "4":
+            stats()
+        elif choice == "5":
+            days = Prompt.ask("Archive tasks older than X days (0 for all)", default="0")
+            try:
+                archive(int(days))
+            except ValueError:
+                console.print("[red]Invalid number[/red]")
+        elif choice == "6":
+            console.print("[bold blue]Goodbye![/bold blue]")
+            break
+
 if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        # Default to interactive mode if no arguments provided
+        sys.argv.append("interactive")
     app()

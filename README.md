@@ -14,7 +14,7 @@ A simple CLI-based task manager that uses the Pomodoro technique and Google Gemi
 
 1.  **Install Dependencies**:
     ```bash
-    pip install -r requirements.txt
+    pip3 install -r requirements.txt
     ```
 
 2.  **Environment Variables**:
@@ -25,39 +25,52 @@ A simple CLI-based task manager that uses the Pomodoro technique and Google Gemi
 
 ## Usage
 
+### Interactive Mode (Recommended)
+Simply run the program to enter the interactive menu:
+```bash
+python3 main.py
+```
+Or with make:
+```bash
+make run
+```
+
+### CLI Commands
+You can still use the CLI commands if you prefer:
+
 ### 1. Ingest Tasks
 Dump your thoughts into the system. Gemini will parse them.
 ```bash
-python main.py ingest "I need to finish the quarterly report, call mom, and buy groceries for dinner."
+python3 main.py ingest "I need to finish the quarterly report, call mom, and buy groceries for dinner."
 ```
 
 ### 2. List Tasks
 See what's on your plate.
 ```bash
-python main.py list
+python3 main.py list
 ```
 
 ### 3. Start a Task
 Pick a task by its ID (or the first few characters of the ID).
 ```bash
-python main.py start <task_id_prefix>
+python3 main.py start <task_id_prefix>
 ```
-Example: `python main.py start t1`
+Example: `python3 main.py start t1`
 
 The timer will run for 25 minutes. When finished, it will ask if you completed the task.
 
 ### 4. Check Progress
 See how many tomatoes you've crushed.
 ```bash
-python main.py stats
+python3 main.py stats
 ```
 
 ### 5. Archive
 Move completed tasks to the archive.
 ```bash
-python main.py archive
+python3 main.py archive
 ```
 To archive tasks completed more than 90 days ago:
 ```bash
-python main.py archive --days 90
+python3 main.py archive --days 90
 ```
