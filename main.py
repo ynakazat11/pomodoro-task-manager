@@ -1,4 +1,5 @@
 import typer
+import time
 from rich.console import Console
 from rich.table import Table
 from typing import Optional
@@ -6,6 +7,8 @@ from datetime import datetime, timedelta
 import gemini_client
 import storage
 import timer
+import github_client
+import os
 from models import TaskStatus, Task
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -13,6 +16,38 @@ import sys
 
 app = typer.Typer()
 console = Console()
+
+def parse_task_refs(task_ref_str: str, tasks: list[Task]) -> list[str]:
+    """
+    Parses a string of task references (IDs or Indexes) into a list of Task IDs.
+    Supports comma-separated values (1,2,3) and ranges (1-3).
+    """
+    target_ids = []
+    refs = [r.strip() for r in task_ref_str.split(',')]
+    
+    for ref in refs:
+        if '-' in ref and ref.replace('-', '').isdigit():
+            # Range
+            start, end = map(int, ref.split('-'))
+            for i in range(start, end + 1):
+                s_i = str(i)
+                if s_i in TASK_INDEX_MAP:
+                    target_ids.append(TASK_INDEX_MAP[s_i])
+        elif ref.isdigit() and ref in TASK_INDEX_MAP:
+            # Index
+            target_ids.append(TASK_INDEX_MAP[ref])
+        else:
+            # ID prefix
+            found = False
+            for t in tasks:
+                if t.id.startswith(ref):
+                    target_ids.append(t.id)
+                    found = True
+                    break
+            if not found:
+                console.print(f"[yellow]Warning: Task reference '{ref}' not found.[/yellow]")
+                
+    return list(set(target_ids)) # Unique IDs
 
 # Global map to store index -> task_id for the current session
 TASK_INDEX_MAP = {}
@@ -22,65 +57,10 @@ def ingest(text: str):
     """
     Ingest a brain dump of tasks.
     """
-    console.print("[bold blue]Processing your brain dump with Gemini...[/bold blue]")
-    try:
-        new_tasks, new_projects = gemini_client.process_brain_dump(text)
-        
-        # Load existing data
-        existing_tasks, existing_projects = storage.load_data()
-        
-        # Merge projects (simple name check could be better, but for now just append)
-        # Ideally we check if project name exists.
-        existing_project_names = {p.name: p for p in existing_projects}
-        
-        final_projects = existing_projects.copy()
-        
-        # Update project IDs in new tasks if project already exists
-        for p in new_projects:
-            if p.name in existing_project_names:
-                # Use existing project ID
-                existing_p = existing_project_names[p.name]
-                # Update all new tasks that pointed to this new p to point to existing_p
-                for t in new_tasks:
-                    if t.project_id == p.id:
-                        t.project_id = existing_p.id
-            else:
-                final_projects.append(p)
-                existing_project_names[p.name] = p # Add to map for subsequent checks
-        
-        final_tasks = existing_tasks + new_tasks
-        
-        storage.save_data(final_tasks, final_projects)
-        
-        console.print(f"[bold green]Successfully added {len(new_tasks)} tasks and {len(new_projects)} new projects![/bold green]")
-        
-        # Show summary
-        table = Table(title="New Tasks")
-        table.add_column("Index", style="dim")
-        table.add_column("Project", style="green")
-        table.add_column("Title", style="cyan")
-        table.add_column("Tomatoes", style="magenta")
-        
-        project_map = {p.id: p.name for p in final_projects}
-        
-        # We can't easily give them a permanent index here without reloading everything and sorting
-        # But for "New Tasks" display, we can just show them as 1..N relative to this batch, 
-        # OR we can just show "-" since they are not in the main list yet.
-        # User asked for "Task Index", implying they want to be able to reference them?
-        # Let's just show "-" for now as they need to run 'list' to get the actionable index.
-        # Or better, we can just list everything after ingest.
-        
-        for i, t in enumerate(new_tasks, 1):
-            p_name = project_map.get(t.project_id, "Unknown")
-            table.add_row("-", p_name, t.title, str(t.estimated_tomatoes))
-            
-        console.print(table)
+    ingest_logic(text)
 
-    except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
-
-@app.command()
-def list():
+@app.command(name="list")
+def list_tasks():
     """
     List all pending tasks.
     """
@@ -275,79 +255,282 @@ def archive(days: int = 0):
     console.print(f"[bold green]Archived {len(tasks_to_archive)} tasks.[/bold green]")
 
 @app.command()
-def delete(task_ref: str):
+def delete(task_refs: str):
     """
-    Delete a task by ID or Index.
+    Delete task(s) by ID or Index.
+    Supports multiple tasks: "1,2,3" or "1-3".
     """
     tasks, projects = storage.load_data()
     
-    target_task_id = None
+    target_ids = parse_task_refs(task_refs, tasks)
     
-    # Check if input is an index
-    if task_ref.isdigit() and task_ref in TASK_INDEX_MAP:
-        target_task_id = TASK_INDEX_MAP[task_ref]
-    else:
-        # Assume it's an ID prefix
-        for t in tasks:
-            if t.id.startswith(task_ref):
-                target_task_id = t.id
-                break
-    
-    if not target_task_id:
-        console.print(f"[bold red]Task '{task_ref}' not found. Try running 'list' first.[/bold red]")
+    if not target_ids:
+        console.print("[bold red]No valid tasks found.[/bold red]")
         return
         
-    # Filter out the task
-    target_task = next((t for t in tasks if t.id == target_task_id), None)
-    
-    if not target_task:
-        console.print(f"[bold red]Task not found.[/bold red]")
+    tasks_to_delete = []
+    for t_id in target_ids:
+        t = next((t for t in tasks if t.id == t_id), None)
+        if t:
+            tasks_to_delete.append(t)
+            
+    if not tasks_to_delete:
+        console.print("[bold red]No tasks found to delete.[/bold red]")
         return
         
-    confirm = typer.confirm(f"Are you sure you want to delete '{target_task.title}'?")
+    console.print(f"[bold]Tasks to delete:[/bold]")
+    for t in tasks_to_delete:
+        console.print(f" - {t.title}")
+        
+    confirm = typer.confirm(f"Are you sure you want to delete these {len(tasks_to_delete)} tasks?")
     if not confirm:
         console.print("[yellow]Deletion cancelled.[/yellow]")
         return
 
-    new_tasks = [t for t in tasks if t.id != target_task_id]
+    # Filter out
+    new_tasks = [t for t in tasks if t.id not in target_ids]
         
     storage.save_data(new_tasks, projects)
-    console.print(f"[bold green]Task deleted.[/bold green]")
+    console.print(f"[bold green]Deleted {len(tasks_to_delete)} tasks.[/bold green]")
 
 @app.command()
-def complete(task_ref: str):
+def complete(task_refs: str):
     """
-    Mark a task as done by ID or Index.
+    Mark task(s) as done by ID or Index.
+    Supports multiple tasks: "1,2,3" or "1-3".
     """
     tasks, projects = storage.load_data()
     
-    target_task_id = None
+    target_ids = parse_task_refs(task_refs, tasks)
     
-    # Check if input is an index
-    if task_ref.isdigit() and task_ref in TASK_INDEX_MAP:
-        target_task_id = TASK_INDEX_MAP[task_ref]
-    else:
-        # Assume it's an ID prefix
-        for t in tasks:
-            if t.id.startswith(task_ref):
-                target_task_id = t.id
-                break
-    
-    if not target_task_id:
-        console.print(f"[bold red]Task '{task_ref}' not found. Try running 'list' first.[/bold red]")
+    if not target_ids:
+        console.print("[bold red]No valid tasks found.[/bold red]")
         return
         
-    target_task = next((t for t in tasks if t.id == target_task_id), None)
-            
-    if not target_task:
-        console.print(f"[bold red]Task with ID '{target_task_id}' not found.[/bold red]")
-        return
-        
-    target_task.status = TaskStatus.DONE
-    target_task.completed_at = datetime.now().isoformat()
+    count = 0
+    for t in tasks:
+        if t.id in target_ids:
+            t.status = TaskStatus.DONE
+            t.completed_at = datetime.now().isoformat()
+            count += 1
     
     storage.save_data(tasks, projects)
-    console.print(f"[bold green]Task '{target_task.title}' marked as DONE![/bold green]")
+    console.print(f"[bold green]Marked {count} tasks as DONE![/bold green]")
+
+@app.command()
+def check_github():
+    """
+    Check GitHub Inbox for new issues and ingest them.
+    """
+    repo_name = os.getenv("GITHUB_REPO")
+    if not repo_name:
+        console.print("[bold red]GITHUB_REPO not set in .env file.[/bold red]")
+        return
+        
+    console.print(f"[bold blue]Checking GitHub repository '{repo_name}' for open issues...[/bold blue]")
+    
+    try:
+        # Fetch issues
+        issues = github_client.fetch_open_issues(repo_name)
+        
+        if not issues:
+            console.print("[yellow]No open issues found.[/yellow]")
+            return
+            
+        console.print(f"[green]Found {len(issues)} open issues.[/green]")
+        
+        # Construct brain dump text
+        brain_dump_lines = []
+        for number, title, body in issues:
+            brain_dump_lines.append(f"- {title}")
+            if body:
+                brain_dump_lines.append(f"  {body}")
+                
+        brain_dump_text = "\n".join(brain_dump_lines)
+        
+        # Reuse ingest logic (but we need to handle the review loop and closing issues)
+        # We can call ingest(brain_dump_text) but we need to know if it was saved to close issues.
+        # Refactoring ingest to return success status would be best, but for now let's just call it.
+        # If the user saves in ingest, we assume success.
+        # BUT `ingest` is a command, calling it directly is fine but we can't easily get return value if it's just printing.
+        # However, since we are in the same process, we can just check if data changed? No.
+        
+        # Let's just run the ingest logic here or refactor ingest to be reusable.
+        # For simplicity, let's copy the ingest logic structure or extract it.
+        # Actually, `ingest` function is right there. Let's modify `ingest` to return True/False if saved?
+        # Or just assume if they don't crash it's fine?
+        # Better: Let's extract the "Review Loop" part of ingest into a helper, but that's a big refactor.
+        
+        # Let's just call ingest. If the user discards, we shouldn't close issues.
+        # We need a way to know.
+        # Let's modify `ingest` to return a boolean.
+        
+        saved = ingest_logic(brain_dump_text)
+        
+        if saved:
+            console.print("[bold blue]Closing GitHub issues...[/bold blue]")
+            for number, _, _ in issues:
+                try:
+                    github_client.close_issue(repo_name, number)
+                    console.print(f" - Closed issue #{number}")
+                except Exception as e:
+                    console.print(f"[red]Failed to close issue #{number}: {e}[/red]")
+            console.print("[bold green]GitHub sync complete![/bold green]")
+        else:
+            console.print("[yellow]Ingest discarded. GitHub issues left open.[/yellow]")
+
+    except Exception as e:
+        console.print(f"[bold red]Error checking GitHub:[/bold red] {e}")
+
+def ingest_logic(text: str) -> bool:
+    """
+    Reusable ingest logic. Returns True if saved, False if discarded.
+    """
+    console.print("[bold blue]Processing with Gemini...[/bold blue]")
+    try:
+        new_tasks, new_projects = gemini_client.process_brain_dump(text)
+        
+        # Load existing data
+        existing_tasks, existing_projects = storage.load_data()
+        
+        # Initial smart merge of projects
+        existing_project_names = {p.name: p for p in existing_projects}
+        final_projects = existing_projects.copy()
+        
+        # Map new project IDs to existing ones if name matches
+        project_id_map = {} # old_id -> new_id
+        
+        for p in new_projects:
+            if p.name in existing_project_names:
+                existing_p = existing_project_names[p.name]
+                project_id_map[p.id] = existing_p.id
+            else:
+                final_projects.append(p)
+                existing_project_names[p.name] = p
+                project_id_map[p.id] = p.id
+                
+        # Update tasks with mapped project IDs
+        for t in new_tasks:
+            if t.project_id in project_id_map:
+                t.project_id = project_id_map[t.project_id]
+
+        # Review Loop
+        while True:
+            console.clear()
+            console.print(Panel("[bold blue]Review Ingested Tasks[/bold blue]"))
+            
+            table = Table(title="Draft Tasks")
+            table.add_column("Index", style="bold white")
+            table.add_column("Project", style="green")
+            table.add_column("Title", style="cyan")
+            table.add_column("Tomatoes", style="magenta")
+            
+            project_map = {p.id: p.name for p in final_projects}
+            
+            for i, t in enumerate(new_tasks, 1):
+                p_name = project_map.get(t.project_id, "Unknown")
+                table.add_row(str(i), p_name, t.title, str(t.estimated_tomatoes))
+                
+            console.print(table)
+            
+            console.print("\n[bold]Options:[/bold]")
+            console.print("[green]s[/green]: Save and Finish")
+            console.print("[red]d[/red]: Discard and Exit")
+            console.print("[cyan]e <index>[/cyan]: Edit Task")
+            console.print("[yellow]m[/yellow]: Merge Projects")
+            
+            choice = Prompt.ask("Action").strip().lower()
+            
+            if choice == 's':
+                final_tasks = existing_tasks + new_tasks
+                storage.save_data(final_tasks, final_projects)
+                console.print(f"[bold green]Successfully added {len(new_tasks)} tasks![/bold green]")
+                return True
+                
+            elif choice == 'd':
+                console.print("[yellow]Discarded.[/yellow]")
+                return False
+                
+            elif choice.startswith('e '):
+                try:
+                    idx = int(choice.split()[1]) - 1
+                    if 0 <= idx < len(new_tasks):
+                        task = new_tasks[idx]
+                        console.print(f"Editing: [bold]{task.title}[/bold]")
+                        
+                        new_title = Prompt.ask("Title", default=task.title)
+                        task.title = new_title
+                        
+                        new_tomatoes = Prompt.ask("Tomatoes", default=str(task.estimated_tomatoes))
+                        if new_tomatoes.isdigit():
+                            task.estimated_tomatoes = int(new_tomatoes)
+                            
+                        # Edit Project
+                        current_p_name = project_map.get(task.project_id, "Unknown")
+                        new_p_name = Prompt.ask("Project", default=current_p_name)
+                        
+                        # Find or create project
+                        found_p = next((p for p in final_projects if p.name == new_p_name), None)
+                        if found_p:
+                            task.project_id = found_p.id
+                        else:
+                            # Create new project?
+                            if typer.confirm(f"Create new project '{new_p_name}'?"):
+                                new_p = gemini_client.Project(
+                                    id=f"p_{datetime.now().timestamp()}",
+                                    name=new_p_name,
+                                    description="",
+                                    created_at=datetime.now().isoformat()
+                                )
+                                final_projects.append(new_p)
+                                task.project_id = new_p.id
+                    else:
+                        console.print("[red]Invalid index[/red]")
+                        time.sleep(1)
+                except (ValueError, IndexError):
+                    console.print("[red]Invalid format. Use 'e <index>'[/red]")
+                    time.sleep(1)
+                    
+            elif choice == 'm':
+                # Simple merge workflow
+                # List projects
+                p_list = list({p.name for p in final_projects if any(t.project_id == p.id for t in new_tasks)})
+                console.print("Active Projects in Draft:")
+                for i, name in enumerate(p_list, 1):
+                    console.print(f"{i}. {name}")
+                    
+                try:
+                    src_idx = int(Prompt.ask("Merge FROM (index)")) - 1
+                    dest_idx = int(Prompt.ask("Merge INTO (index)")) - 1
+                    
+                    if 0 <= src_idx < len(p_list) and 0 <= dest_idx < len(p_list) and src_idx != dest_idx:
+                        src_name = p_list[src_idx]
+                        dest_name = p_list[dest_idx]
+                        
+                        src_p = next(p for p in final_projects if p.name == src_name)
+                        dest_p = next(p for p in final_projects if p.name == dest_name)
+                        
+                        # Move tasks
+                        count = 0
+                        for t in new_tasks:
+                            if t.project_id == src_p.id:
+                                t.project_id = dest_p.id
+                                count += 1
+                        console.print(f"[green]Moved {count} tasks from '{src_name}' to '{dest_name}'[/green]")
+                        time.sleep(1)
+                    else:
+                        console.print("[red]Invalid selection[/red]")
+                        time.sleep(1)
+                except ValueError:
+                    console.print("[red]Invalid input[/red]")
+                    time.sleep(1)
+            else:
+                console.print("[red]Unknown command[/red]")
+                time.sleep(1)
+
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        return False
 
 @app.command()
 def interactive():
@@ -365,18 +548,19 @@ def interactive():
         console.print("5. [cyan]Archive Completed[/cyan]")
         console.print("6. [cyan]Mark Task Done[/cyan]")
         console.print("7. [red]Delete Task[/red]")
-        console.print("8. [red]Exit[/red]")
+        console.print("8. [magenta]Check GitHub Inbox[/magenta]")
+        console.print("9. [red]Exit[/red]")
         
-        choice = Prompt.ask("What would you like to do?", choices=["1", "2", "3", "4", "5", "6", "7", "8"], default="2")
+        choice = Prompt.ask("What would you like to do?", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9"], default="2")
         
         if choice == "1":
             text = Prompt.ask("Enter your brain dump")
             ingest(text)
         elif choice == "2":
-            list()
+            list_tasks()
         elif choice == "3":
             # List tasks first to see IDs
-            list()
+            list_tasks()
             task_id = Prompt.ask("Enter Task ID (or prefix)")
             start(task_id)
         elif choice == "4":
@@ -389,15 +573,17 @@ def interactive():
                 console.print("[red]Invalid number[/red]")
         elif choice == "6":
             # List tasks first
-            list()
-            task_ref = Prompt.ask("Enter Task Index or ID to mark done")
-            complete(task_ref)
+            list_tasks()
+            task_refs = Prompt.ask("Enter Task Index(es) or ID(s) to mark done (e.g. 1,2 or 1-3)")
+            complete(task_refs)
         elif choice == "7":
             # List tasks first
-            list()
-            task_ref = Prompt.ask("Enter Task Index or ID to delete")
-            delete(task_ref)
+            list_tasks()
+            task_refs = Prompt.ask("Enter Task Index(es) or ID(s) to delete (e.g. 1,2 or 1-3)")
+            delete(task_refs)
         elif choice == "8":
+            check_github()
+        elif choice == "9":
             console.print("[bold blue]Goodbye![/bold blue]")
             break
 
