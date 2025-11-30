@@ -382,6 +382,64 @@ def check_github():
     except Exception as e:
         console.print(f"[bold red]Error checking GitHub:[/bold red] {e}")
 
+@app.command()
+def sync():
+    """
+    Sync current tasks to GitHub (tasks.md).
+    Requires GITHUB_REPO to be a PRIVATE repository.
+    """
+    repo_name = os.getenv("GITHUB_REPO")
+    if not repo_name:
+        console.print("[bold red]GITHUB_REPO not set in .env file.[/bold red]")
+        return
+        
+    console.print(f"[bold blue]Syncing tasks to '{repo_name}'...[/bold blue]")
+    
+    try:
+        # 1. Check Privacy
+        is_private = github_client.get_repo_privacy(repo_name)
+        if not is_private:
+            console.print("[bold red]SECURITY WARNING: Repository is PUBLIC![/bold red]")
+            console.print("To protect your privacy, sync is disabled for public repositories.")
+            return
+
+        # 2. Load Data
+        tasks, projects = storage.load_data()
+        project_map = {p.id: p.name for p in projects}
+        
+        # 3. Format Markdown
+        md_lines = ["# Current Tasks", "", f"Last Updated: {datetime.now().isoformat()}", ""]
+        
+        # Group by Project
+        tasks_by_project = {}
+        for t in tasks:
+            if t.status == TaskStatus.ARCHIVED:
+                continue
+            p_name = project_map.get(t.project_id, "No Project")
+            if p_name not in tasks_by_project:
+                tasks_by_project[p_name] = []
+            tasks_by_project[p_name].append(t)
+            
+        for p_name, p_tasks in tasks_by_project.items():
+            md_lines.append(f"## {p_name}")
+            md_lines.append("| Status | Title | Tomatoes |")
+            md_lines.append("| :--- | :--- | :--- |")
+            for t in p_tasks:
+                status_icon = "✅" if t.status == TaskStatus.DONE else "⬜"
+                if t.status == TaskStatus.IN_PROGRESS:
+                    status_icon = "🍅"
+                md_lines.append(f"| {status_icon} | {t.title} | {t.completed_tomatoes}/{t.estimated_tomatoes} |")
+            md_lines.append("")
+            
+        content = "\n".join(md_lines)
+        
+        # 4. Push to GitHub
+        github_client.update_file(repo_name, "tasks.md", content, "Update tasks.md via CLI")
+        console.print("[bold green]Successfully synced 'tasks.md' to GitHub![/bold green]")
+        
+    except Exception as e:
+        console.print(f"[bold red]Sync failed:[/bold red] {e}")
+
 def ingest_logic(text: str) -> bool:
     """
     Reusable ingest logic. Returns True if saved, False if discarded.
@@ -549,9 +607,10 @@ def interactive():
         console.print("6. [cyan]Mark Task Done[/cyan]")
         console.print("7. [red]Delete Task[/red]")
         console.print("8. [magenta]Check GitHub Inbox[/magenta]")
-        console.print("9. [red]Exit[/red]")
+        console.print("9. [cyan]Sync to GitHub[/cyan]")
+        console.print("10. [red]Exit[/red]")
         
-        choice = Prompt.ask("What would you like to do?", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9"], default="2")
+        choice = Prompt.ask("What would you like to do?", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"], default="2")
         
         if choice == "1":
             text = Prompt.ask("Enter your brain dump")
@@ -584,6 +643,8 @@ def interactive():
         elif choice == "8":
             check_github()
         elif choice == "9":
+            sync()
+        elif choice == "10":
             console.print("[bold blue]Goodbye![/bold blue]")
             break
 

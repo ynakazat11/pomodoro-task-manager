@@ -60,3 +60,39 @@ def close_issue(repo_name: str, issue_number: int):
         issue.edit(state='closed')
     except Exception as e:
         raise Exception(f"Failed to close issue #{issue_number}: {e}")
+
+def get_repo_privacy(repo_name: str) -> bool:
+    """
+    Returns True if the repository is private, False otherwise.
+    """
+    g = get_github_client()
+    if not g:
+        raise ValueError("GITHUB_TOKEN not found.")
+    
+    try:
+        repo = g.get_repo(repo_name)
+        return repo.private
+    except Exception as e:
+        raise Exception(f"Failed to get repo info for {repo_name}: {e}")
+
+def update_file(repo_name: str, path: str, content: str, message: str):
+    """
+    Creates or updates a file in the repository.
+    """
+    g = get_github_client()
+    if not g:
+        raise ValueError("GITHUB_TOKEN not found.")
+        
+    try:
+        repo = g.get_repo(repo_name)
+        
+        try:
+            # Try to get existing file to get its sha
+            contents = repo.get_contents(path)
+            repo.update_file(contents.path, message, content, contents.sha)
+        except Exception:
+            # File doesn't exist, create it
+            repo.create_file(path, message, content)
+            
+    except Exception as e:
+        raise Exception(f"Failed to update file {path} in {repo_name}: {e}")
