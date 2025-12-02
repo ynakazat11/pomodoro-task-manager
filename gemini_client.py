@@ -24,28 +24,21 @@ def process_brain_dump(text: str) -> Tuple[List[Task], List[Project]]:
     model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
     prompt = f"""
-    You are an expert task manager and productivity coach.
-    I will give you a "brain dump" of tasks and ideas.
-    Your goal is to:
-    1. Analyze the text and identify distinct tasks.
-    2. Group related tasks into "Projects" (or Themes).
-    3. Estimate the number of "Tomatoes" (25-minute work slots) for each task. Be realistic. 
-       If a task is too big (more than 4 tomatoes), break it down into smaller subtasks.
-    4. Return the result strictly as a JSON object with the following structure:
+    You are a helpful project manager.
+    I will give you a "brain dump" of tasks.
+    Your job is to:
+    1. Break down the brain dump into individual, actionable tasks.
+    2. Estimate the effort for each task in "Tomatoes" (1 Tomato = 25 minutes).
+    3. Assign each task to a Project (Theme). If no project fits, create a new one or use "General".
+    4. Extract any deadlines mentioned (e.g., "by Friday", "tomorrow") and convert them to YYYY-MM-DD format. If no deadline, leave null.
+
+    Output valid JSON with the following structure:
     {{
         "projects": [
-            {{
-                "name": "Project Name",
-                "description": "Brief description of the project goal"
-            }}
+            {{ "name": "Project Name", "description": "Optional description" }}
         ],
         "tasks": [
-            {{
-                "title": "Task Title",
-                "description": "Actionable description",
-                "estimated_tomatoes": <int>,
-                "project_name": "Project Name" (must match one of the projects above)
-            }}
+            {{ "title": "Task Title", "estimated_tomatoes": 1, "project_name": "Project Name", "deadline": "YYYY-MM-DD or null" }}
         ]
     }}
 
@@ -90,7 +83,8 @@ def process_brain_dump(text: str) -> Tuple[List[Task], List[Project]]:
                 title=t_data["title"],
                 description=t_data.get("description", ""),
                 estimated_tomatoes=int(t_data.get("estimated_tomatoes", 1)),
-                project_id=project_id
+                project_id=project_id,
+                deadline=t_data.get("deadline")
             )
             tasks.append(task)
             

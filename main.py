@@ -77,6 +77,7 @@ def list_tasks():
     table.add_column("Tomatoes", style="magenta")
     table.add_column("Status", style="yellow")
     table.add_column("Project", style="green")
+    table.add_column("Deadline", style="red")
     
     current_index = 1
     # Sort by project maybe?
@@ -93,7 +94,8 @@ def list_tasks():
                 t.title, 
                 f"{t.completed_tomatoes}/{t.estimated_tomatoes}", 
                 f"[{status_color}]{t.status.value}[/{status_color}]", 
-                p_name
+                p_name,
+                t.deadline or ""
             )
             current_index += 1
             
@@ -294,6 +296,133 @@ def delete(task_refs: str):
     console.print(f"[bold green]Deleted {len(tasks_to_delete)} tasks.[/bold green]")
 
 @app.command()
+def edit(task_refs: str):
+    """
+    Edit task(s) by ID or Index.
+    Supports multiple tasks: "1,2,3" or "1-3".
+    """
+    tasks, projects = storage.load_data()
+    target_ids = parse_task_refs(task_refs, tasks)
+    
+    if not target_ids:
+        console.print("[bold red]No valid tasks found.[/bold red]")
+        return
+        
+    target_tasks = [t for t in tasks if t.id in target_ids]
+    project_map = {p.id: p.name for p in projects}
+    
+    if len(target_tasks) == 1:
+        # Single Task Edit
+        t = target_tasks[0]
+        p_name = project_map.get(t.project_id, "Unknown")
+        console.print(Panel(f"""
+        [bold]Editing Task[/bold]
+        Title: {t.title}
+        Tomatoes: {t.estimated_tomatoes}
+        Project: {p_name}
+        Deadline: {t.deadline or 'None'}
+        """, title="Current Details", border_style="blue"))
+        
+        # Title
+        new_title = Prompt.ask("New Title", default=t.title)
+        t.title = new_title
+        
+        # Tomatoes
+        new_tomatoes = Prompt.ask("New Tomatoes", default=str(t.estimated_tomatoes))
+        if new_tomatoes.isdigit():
+            t.estimated_tomatoes = int(new_tomatoes)
+            
+        # Deadline
+        new_deadline = Prompt.ask("New Deadline (YYYY-MM-DD)", default=t.deadline or "")
+        t.deadline = new_deadline if new_deadline.strip() else None
+        
+        # Project
+        new_p_name = Prompt.ask("New Project", default=p_name)
+        if new_p_name != p_name:
+            # Find or create
+            found_p = next((p for p in projects if p.name == new_p_name), None)
+            if found_p:
+                t.project_id = found_p.id
+            else:
+                if typer.confirm(f"Create new project '{new_p_name}'?"):
+                    new_p = gemini_client.Project(
+                        id=f"p_{datetime.now().timestamp()}",
+                        name=new_p_name,
+                        description="",
+                        created_at=datetime.now().isoformat()
+                    )
+                    projects.append(new_p)
+                    t.project_id = new_p.id
+                    
+        console.print("[bold green]Task updated![/bold green]")
+        
+    else:
+        # Bulk Edit
+        console.print(f"[bold blue]Bulk Editing {len(target_tasks)} Tasks[/bold blue]")
+        console.print("What do you want to update?")
+        console.print("[green]p[/green]: Project")
+        console.print("[red]d[/red]: Deadline")
+        console.print("[magenta]t[/magenta]: Tomatoes")
+        console.print("[cyan]i[/cyan]: Iterate Titles (rename one by one)")
+        
+        choice = Prompt.ask("Choice", choices=["p", "d", "t", "i"])
+        
+        if choice == "p":
+            # List projects
+            console.print("Existing Projects:")
+            unique_p_names = sorted(list({p.name for p in projects}))
+            for name in unique_p_names:
+                console.print(f" - {name}")
+                
+            new_p_name = Prompt.ask("Enter New Project Name")
+            
+            # Find or create
+            found_p = next((p for p in projects if p.name == new_p_name), None)
+            target_p_id = None
+            
+            if found_p:
+                target_p_id = found_p.id
+            else:
+                if typer.confirm(f"Create new project '{new_p_name}'?"):
+                    new_p = gemini_client.Project(
+                        id=f"p_{datetime.now().timestamp()}",
+                        name=new_p_name,
+                        description="",
+                        created_at=datetime.now().isoformat()
+                    )
+                    projects.append(new_p)
+                    target_p_id = new_p.id
+            
+            if target_p_id:
+                for t in target_tasks:
+                    t.project_id = target_p_id
+                console.print(f"[bold green]Updated project for {len(target_tasks)} tasks.[/bold green]")
+                
+        elif choice == "d":
+            new_deadline = Prompt.ask("New Deadline (YYYY-MM-DD) for ALL", default="")
+            val = new_deadline if new_deadline.strip() else None
+            for t in target_tasks:
+                t.deadline = val
+            console.print(f"[bold green]Updated deadline for {len(target_tasks)} tasks.[/bold green]")
+            
+        elif choice == "t":
+            new_tomatoes = Prompt.ask("New Tomatoes count for ALL")
+            if new_tomatoes.isdigit():
+                val = int(new_tomatoes)
+                for t in target_tasks:
+                    t.estimated_tomatoes = val
+                console.print(f"[bold green]Updated tomatoes for {len(target_tasks)} tasks.[/bold green]")
+                
+        elif choice == "i":
+            for t in target_tasks:
+                console.print(f"Editing: [dim]{t.id[:8]}[/dim]")
+                new_title = Prompt.ask("Title", default=t.title)
+                t.title = new_title
+            console.print(f"[bold green]Updated titles for {len(target_tasks)} tasks.[/bold green]")
+
+    storage.save_data(tasks, projects)
+
+@app.command()
 def complete(task_refs: str):
     """
     Mark task(s) as done by ID or Index.
@@ -422,13 +551,13 @@ def sync():
             
         for p_name, p_tasks in tasks_by_project.items():
             md_lines.append(f"## {p_name}")
-            md_lines.append("| Status | Title | Tomatoes |")
-            md_lines.append("| :--- | :--- | :--- |")
+            md_lines.append("| Status | Title | Tomatoes | Deadline |")
+            md_lines.append("| :--- | :--- | :--- | :--- |")
             for t in p_tasks:
                 status_icon = "✅" if t.status == TaskStatus.DONE else "⬜"
                 if t.status == TaskStatus.IN_PROGRESS:
                     status_icon = "🍅"
-                md_lines.append(f"| {status_icon} | {t.title} | {t.completed_tomatoes}/{t.estimated_tomatoes} |")
+                md_lines.append(f"| {status_icon} | {t.title} | {t.completed_tomatoes}/{t.estimated_tomatoes} | {t.deadline or ''} |")
             md_lines.append("")
             
         content = "\n".join(md_lines)
@@ -482,12 +611,13 @@ def ingest_logic(text: str) -> bool:
             table.add_column("Project", style="green")
             table.add_column("Title", style="cyan")
             table.add_column("Tomatoes", style="magenta")
+            table.add_column("Deadline", style="red")
             
             project_map = {p.id: p.name for p in final_projects}
             
             for i, t in enumerate(new_tasks, 1):
                 p_name = project_map.get(t.project_id, "Unknown")
-                table.add_row(str(i), p_name, t.title, str(t.estimated_tomatoes))
+                table.add_row(str(i), p_name, t.title, str(t.estimated_tomatoes), t.deadline or "")
                 
             console.print(table)
             
@@ -608,9 +738,10 @@ def interactive():
         console.print("7. [red]Delete Task[/red]")
         console.print("8. [magenta]Check GitHub Inbox[/magenta]")
         console.print("9. [cyan]Sync to GitHub[/cyan]")
-        console.print("10. [red]Exit[/red]")
+        console.print("10. [yellow]Edit Task(s)[/yellow]")
+        console.print("11. [red]Exit[/red]")
         
-        choice = Prompt.ask("What would you like to do?", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"], default="2")
+        choice = Prompt.ask("What would you like to do?", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"], default="2")
         
         if choice == "1":
             text = Prompt.ask("Enter your brain dump")
@@ -645,6 +776,11 @@ def interactive():
         elif choice == "9":
             sync()
         elif choice == "10":
+            # List tasks first
+            list_tasks()
+            task_refs = Prompt.ask("Enter Task Index(es) or ID(s) to edit (e.g. 1,2 or 1-3)")
+            edit(task_refs)
+        elif choice == "11":
             console.print("[bold blue]Goodbye![/bold blue]")
             break
 
