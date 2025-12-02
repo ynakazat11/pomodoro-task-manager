@@ -88,6 +88,34 @@ def list_tasks():
             
             TASK_INDEX_MAP[str(current_index)] = t.id
             
+            deadline_str = t.deadline or ""
+            deadline_style = ""
+            if t.deadline:
+                try:
+                    due_date = datetime.fromisoformat(t.deadline)
+                    today = datetime.now()
+                    delta = (due_date - today).days
+                    
+                    if delta < 0: # Overdue
+                        deadline_style = "bold red"
+                    elif delta <= 0: # Due today (delta is -1 to 0 roughly depending on time)
+                         # Actually delta days is just date diff. 
+                         # Let's be more precise: compare dates.
+                         if due_date.date() < today.date():
+                             deadline_style = "bold red" # Overdue
+                         elif due_date.date() == today.date():
+                             deadline_style = "bold red" # Due Today
+                         elif delta <= 7:
+                             deadline_style = "yellow"
+                         else:
+                             deadline_style = "green"
+                    elif delta <= 7:
+                        deadline_style = "yellow"
+                    else:
+                        deadline_style = "green"
+                except ValueError:
+                    pass
+
             table.add_row(
                 str(current_index),
                 t.id[:8], 
@@ -95,7 +123,7 @@ def list_tasks():
                 f"{t.completed_tomatoes}/{t.estimated_tomatoes}", 
                 f"[{status_color}]{t.status.value}[/{status_color}]", 
                 p_name,
-                t.deadline or ""
+                f"[{deadline_style}]{deadline_str}[/{deadline_style}]" if deadline_style else deadline_str
             )
             current_index += 1
             
@@ -539,6 +567,29 @@ def sync():
         # 3. Format Markdown
         md_lines = ["# Current Tasks", "", f"Last Updated: {datetime.now().isoformat()}", ""]
         
+        # 3a. Due Soon Section
+        today = datetime.now()
+        due_soon_tasks = []
+        for t in tasks:
+            if t.status in [TaskStatus.TODO, TaskStatus.IN_PROGRESS] and t.deadline:
+                try:
+                    d = datetime.fromisoformat(t.deadline)
+                    if (d - today).days <= 7: # Overdue or within 7 days
+                        due_soon_tasks.append((t, d))
+                except ValueError:
+                    pass
+        
+        if due_soon_tasks:
+            due_soon_tasks.sort(key=lambda x: x[1])
+            md_lines.append("## 🚨 Due Soon (Next 7 Days)")
+            md_lines.append("| Date | Title | Project |")
+            md_lines.append("| :--- | :--- | :--- |")
+            for t, d in due_soon_tasks:
+                icon = "🔴" if d.date() <= today.date() else "🟡"
+                p_name = project_map.get(t.project_id, "Unknown")
+                md_lines.append(f"| {icon} {t.deadline} | {t.title} | {p_name} |")
+            md_lines.append("")
+        
         # Group by Project
         tasks_by_project = {}
         for t in tasks:
@@ -568,6 +619,63 @@ def sync():
         
     except Exception as e:
         console.print(f"[bold red]Sync failed:[/bold red] {e}")
+
+@app.command()
+def due(days: int = 7):
+    """
+    List tasks due within the next X days (default 7).
+    """
+    tasks, projects = storage.load_data()
+    project_map = {p.id: p.name for p in projects}
+    
+    cutoff_date = datetime.now() + timedelta(days=days)
+    today = datetime.now()
+    
+    due_tasks = []
+    
+    for t in tasks:
+        if t.status == TaskStatus.ARCHIVED or t.status == TaskStatus.DONE:
+            continue
+        if not t.deadline:
+            continue
+            
+        try:
+            t_date = datetime.fromisoformat(t.deadline)
+            # Check if due date is <= cutoff (and we include overdue tasks too usually?)
+            # Let's include everything up to cutoff.
+            if t_date.date() <= cutoff_date.date():
+                due_tasks.append((t, t_date))
+        except ValueError:
+            continue
+            
+    if not due_tasks:
+        console.print(f"[green]No tasks due within the next {days} days![/green]")
+        return
+        
+    # Sort by date
+    due_tasks.sort(key=lambda x: x[1])
+    
+    table = Table(title=f"Tasks Due Within {days} Days")
+    table.add_column("Date", style="bold white")
+    table.add_column("Title", style="cyan")
+    table.add_column("Project", style="green")
+    
+    for t, date in due_tasks:
+        style = "green"
+        if date.date() < today.date():
+            style = "bold red" # Overdue
+        elif date.date() == today.date():
+            style = "bold red" # Today
+        elif (date - today).days <= 7:
+            style = "yellow"
+            
+        table.add_row(
+            f"[{style}]{t.deadline}[/{style}]",
+            t.title,
+            project_map.get(t.project_id, "Unknown")
+        )
+        
+    console.print(table)
 
 def ingest_logic(text: str) -> bool:
     """
@@ -653,6 +761,10 @@ def ingest_logic(text: str) -> bool:
                         if new_tomatoes.isdigit():
                             task.estimated_tomatoes = int(new_tomatoes)
                             
+                        # Edit Deadline
+                        new_deadline = Prompt.ask("Deadline (YYYY-MM-DD)", default=task.deadline or "")
+                        task.deadline = new_deadline if new_deadline.strip() else None
+                            
                         # Edit Project
                         current_p_name = project_map.get(task.project_id, "Unknown")
                         new_p_name = Prompt.ask("Project", default=current_p_name)
@@ -726,6 +838,28 @@ def interactive():
     Start the interactive session.
     """
     console.print(Panel.fit("[bold blue]Welcome to Pomodoro Task Manager[/bold blue]", border_style="blue"))
+    
+    # Startup Summary
+    tasks, _ = storage.load_data()
+    today = datetime.now()
+    due_soon_count = 0
+    overdue_count = 0
+    
+    for t in tasks:
+        if t.status in [TaskStatus.TODO, TaskStatus.IN_PROGRESS] and t.deadline:
+            try:
+                d = datetime.fromisoformat(t.deadline)
+                if d.date() < today.date():
+                    overdue_count += 1
+                elif (d - today).days <= 7:
+                    due_soon_count += 1
+            except ValueError:
+                pass
+                
+    if overdue_count > 0:
+        console.print(f"🚨 [bold red]You have {overdue_count} OVERDUE task(s)![/bold red]")
+    if due_soon_count > 0:
+        console.print(f"📅 [yellow]You have {due_soon_count} task(s) due within 7 days.[/yellow]")
     
     while True:
         console.print("\n[bold]Main Menu[/bold]")
