@@ -31,8 +31,9 @@ class Task:
     estimated_tomatoes: int = 1
     completed_tomatoes: int = 0
     status: TaskStatus = TaskStatus.TODO
-    project_id: Optional[str] = None
+    project_id: str = "default"
     deadline: Optional[str] = None # YYYY-MM-DD
+    priority: Optional[str] = None # High, Medium, Low
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     completed_at: Optional[str] = None

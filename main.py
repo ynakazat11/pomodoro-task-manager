@@ -142,11 +142,16 @@ def list_tasks(
         console.print("[yellow]No tasks found matching criteria.[/yellow]")
         return
 
-    # Sort: Project Name -> Deadline (Empty last) -> ID
+    # Sort: Project Name -> Priority (High>Med>Low) -> Deadline (Empty last) -> ID
     def sort_key(t):
         p_name = project_map.get(t.project_id, "No Project")
+        
+        # Priority Value (High=1, Medium=2, Low=3, None=4)
+        priority_map = {"High": 1, "Medium": 2, "Low": 3}
+        p_val = priority_map.get(t.priority, 4)
+        
         deadline_val = t.deadline if t.deadline else "9999-12-31"
-        return (p_name, deadline_val, t.id)
+        return (p_name, p_val, deadline_val, t.id)
         
     filtered_tasks.sort(key=sort_key)
     
@@ -158,6 +163,7 @@ def list_tasks(
     table = Table(title=title)
     table.add_column("Index", style="bold white")
     table.add_column("ID", style="dim")
+    table.add_column("P", style="bold") # Priority
     table.add_column("Title", style="cyan")
     table.add_column("Tomatoes", style="magenta")
     table.add_column("Status", style="yellow")
@@ -196,9 +202,19 @@ def list_tasks(
             except ValueError:
                 pass
 
+        # Priority Icon
+        p_icon = ""
+        if t.priority == "High":
+            p_icon = "🔴"
+        elif t.priority == "Medium":
+            p_icon = "🟡"
+        elif t.priority == "Low":
+            p_icon = "🔵"
+
         table.add_row(
             str(current_index),
-            t.id[:8], 
+            t.id[:8],
+            p_icon,
             t.title, 
             f"{t.completed_tomatoes}/{t.estimated_tomatoes}", 
             f"[{status_color}]{t.status.value}[/{status_color}]", 
@@ -492,6 +508,24 @@ def edit(task_refs: str):
         if new_tomatoes.isdigit():
             t.estimated_tomatoes = int(new_tomatoes)
             
+        # Status
+        console.print(f"Current Status: [cyan]{t.status.value}[/cyan]")
+        new_status = Prompt.ask("New Status (todo/in_progress/done/archived) or [Enter] to keep", default="").strip().lower()
+        if new_status:
+            try:
+                t.status = TaskStatus(new_status)
+            except ValueError:
+                console.print(f"[red]Invalid status: {new_status}[/red]")
+
+        # Priority
+        console.print(f"Current Priority: [cyan]{t.priority or 'None'}[/cyan]")
+        new_priority = Prompt.ask("New Priority (High/Medium/Low) or [Enter] to keep", default="").strip().capitalize()
+        if new_priority:
+            if new_priority in ["High", "Medium", "Low"]:
+                t.priority = new_priority
+            else:
+                console.print(f"[red]Invalid priority: {new_priority}[/red]")
+
         # Deadline
         new_deadline = Prompt.ask("New Deadline (YYYY-MM-DD)", default=t.deadline or "")
         t.deadline = new_deadline if new_deadline.strip() else None
@@ -702,15 +736,22 @@ def sync():
         # 3a. Due Soon Section
         today = datetime.now()
         due_soon_tasks = []
-        for t in tasks:
-            if t.status in [TaskStatus.TODO, TaskStatus.IN_PROGRESS] and t.deadline:
-                try:
-                    d = datetime.fromisoformat(t.deadline)
-                    if (d - today).days <= 7: # Overdue or within 7 days
-                        due_soon_tasks.append((t, d))
-                except ValueError:
-                    pass
+        high_priority_tasks = []
         
+        for t in tasks:
+            if t.status in [TaskStatus.TODO, TaskStatus.IN_PROGRESS]:
+                # Due Soon
+                if t.deadline:
+                    try:
+                        d = datetime.fromisoformat(t.deadline)
+                        if (d - today).days <= 7: # Overdue or within 7 days
+                            due_soon_tasks.append((t, d))
+                    except ValueError:
+                        pass
+                # High Priority
+                if t.priority == "High":
+                    high_priority_tasks.append(t)
+
         if due_soon_tasks:
             due_soon_tasks.sort(key=lambda x: x[1])
             md_lines.append("## 🚨 Due Soon (Next 7 Days)")
@@ -721,7 +762,16 @@ def sync():
                 p_name = project_map.get(t.project_id, "Unknown")
                 md_lines.append(f"| {icon} {t.deadline} | {t.title} | {p_name} |")
             md_lines.append("")
-        
+
+        if high_priority_tasks:
+            md_lines.append("## 🔥 High Priority")
+            md_lines.append("| Title | Project | Deadline |")
+            md_lines.append("| :--- | :--- | :--- |")
+            for t in high_priority_tasks:
+                p_name = project_map.get(t.project_id, "Unknown")
+                md_lines.append(f"| {t.title} | {p_name} | {t.deadline or ''} |")
+            md_lines.append("")
+
         # Group by Project
         tasks_by_project = {}
         for t in tasks:
@@ -734,13 +784,19 @@ def sync():
             
         for p_name, p_tasks in tasks_by_project.items():
             md_lines.append(f"## {p_name}")
-            md_lines.append("| ID | Status | Title | Tomatoes | Deadline |")
-            md_lines.append("| :--- | :--- | :--- | :--- | :--- |")
+            md_lines.append("| ID | P | Status | Title | Tomatoes | Deadline |")
+            md_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- |")
             for t in p_tasks:
                 status_icon = "✅" if t.status == TaskStatus.DONE else "⬜"
                 if t.status == TaskStatus.IN_PROGRESS:
                     status_icon = "🍅"
-                md_lines.append(f"| `{t.id[:8]}` | {status_icon} | {t.title} | {t.completed_tomatoes}/{t.estimated_tomatoes} | {t.deadline or ''} |")
+                
+                p_icon = ""
+                if t.priority == "High": p_icon = "🔴"
+                elif t.priority == "Medium": p_icon = "🟡"
+                elif t.priority == "Low": p_icon = "🔵"
+                
+                md_lines.append(f"| `{t.id[:8]}` | {p_icon} | {status_icon} | {t.title} | {t.completed_tomatoes}/{t.estimated_tomatoes} | {t.deadline or ''} |")
             md_lines.append("")
             
         content = "\n".join(md_lines)
@@ -893,6 +949,24 @@ def ingest_logic(text: str) -> bool:
                         if new_tomatoes.isdigit():
                             task.estimated_tomatoes = int(new_tomatoes)
                             
+                        # Edit Status
+                        console.print(f"Current Status: [cyan]{task.status.value}[/cyan]")
+                        new_status = Prompt.ask("New Status (todo/in_progress/done/archived) or [Enter] to keep", default="").strip().lower()
+                        if new_status:
+                            try:
+                                task.status = TaskStatus(new_status)
+                            except ValueError:
+                                console.print(f"[red]Invalid status: {new_status}[/red]")
+
+                        # Edit Priority
+                        console.print(f"Current Priority: [cyan]{task.priority or 'None'}[/cyan]")
+                        new_priority = Prompt.ask("New Priority (High/Medium/Low) or [Enter] to keep", default="").strip().capitalize()
+                        if new_priority:
+                            if new_priority in ["High", "Medium", "Low"]:
+                                task.priority = new_priority
+                            else:
+                                console.print(f"[red]Invalid priority: {new_priority}[/red]")
+
                         # Edit Deadline
                         new_deadline = Prompt.ask("Deadline (YYYY-MM-DD)", default=task.deadline or "")
                         task.deadline = new_deadline if new_deadline.strip() else None
