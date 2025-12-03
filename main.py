@@ -2,7 +2,7 @@ import typer
 import time
 from rich.console import Console
 from rich.table import Table
-from typing import Optional
+from typing import Optional, Annotated
 from datetime import datetime, timedelta
 import gemini_client
 import storage
@@ -59,18 +59,103 @@ def ingest(text: str):
     """
     ingest_logic(text)
 
+from typing import Optional, Annotated
+
+def filter_tasks(tasks: list[Task], projects: list, project_filter: Optional[str] = None, due_filter: Optional[int] = None, id_filter: Optional[str] = None) -> list[Task]:
+    """
+    Helper to filter tasks based on criteria.
+    """
+    filtered = []
+    project_map = {p.id: p.name for p in projects}
+    today = datetime.now()
+    
+    for t in tasks:
+        if t.status == TaskStatus.ARCHIVED:
+            continue
+            
+        # ID Filter
+        if id_filter and not t.id.startswith(id_filter):
+            continue
+            
+        # Project Filter
+        p_name = project_map.get(t.project_id, "No Project")
+        if project_filter and project_filter.lower() not in p_name.lower():
+            continue
+            
+        # Due Filter
+        if due_filter is not None:
+            if not t.deadline:
+                continue
+            try:
+                d = datetime.fromisoformat(t.deadline)
+                if (d - today).days > due_filter:
+                    continue
+            except ValueError:
+                continue
+                
+        filtered.append(t)
+    return filtered
+
+def prompt_filter_options() -> dict:
+    """
+    Prompts user for filter options in interactive mode.
+    Returns a dict of kwargs for filter_tasks/commands.
+    """
+    console.print("[dim]Filter options: [bold cyan]p[/bold cyan]roject, [bold cyan]d[/bold cyan]ue, [bold cyan]i[/bold cyan]d, or [bold white]Enter[/bold white] for all[/dim]")
+    filter_choice = Prompt.ask("Filter?", default="").strip().lower()
+    
+    filters = {}
+    if filter_choice == 'p':
+        filters['project'] = Prompt.ask("Project Name")
+    elif filter_choice == 'd':
+        d_val = Prompt.ask("Due within X days")
+        if d_val.isdigit():
+            filters['due'] = int(d_val)
+        else:
+            console.print("[red]Invalid number, ignoring due filter.[/red]")
+    elif filter_choice == 'i':
+        filters['id'] = Prompt.ask("ID Prefix")
+        
+    return filters
+
 @app.command(name="list")
-def list_tasks():
+def list_tasks(
+    project: Annotated[Optional[str], typer.Option(help="Filter by project name (fuzzy match)")] = None,
+    due: Annotated[Optional[int], typer.Option(help="Filter by tasks due within X days")] = None,
+    id: Annotated[Optional[str], typer.Option(help="Filter by ID prefix")] = None
+):
     """
     List all pending tasks.
+    Default sort: Project -> Deadline -> ID.
     """
     global TASK_INDEX_MAP
     TASK_INDEX_MAP.clear()
     
     tasks, projects = storage.load_data()
     project_map = {p.id: p.name for p in projects}
+    today = datetime.now()
     
-    table = Table(title="Pending Tasks")
+    # Filter
+    filtered_tasks = filter_tasks(tasks, projects, project, due, id)
+        
+    if not filtered_tasks:
+        console.print("[yellow]No tasks found matching criteria.[/yellow]")
+        return
+
+    # Sort: Project Name -> Deadline (Empty last) -> ID
+    def sort_key(t):
+        p_name = project_map.get(t.project_id, "No Project")
+        deadline_val = t.deadline if t.deadline else "9999-12-31"
+        return (p_name, deadline_val, t.id)
+        
+    filtered_tasks.sort(key=sort_key)
+    
+    title = "Pending Tasks"
+    if project: title += f" | Project: {project}"
+    if due: title += f" | Due: {due} days"
+    if id: title += f" | ID: {id}"
+    
+    table = Table(title=title)
     table.add_column("Index", style="bold white")
     table.add_column("ID", style="dim")
     table.add_column("Title", style="cyan")
@@ -80,52 +165,47 @@ def list_tasks():
     table.add_column("Deadline", style="red")
     
     current_index = 1
-    # Sort by project maybe?
-    for t in tasks:
-        if t.status != TaskStatus.ARCHIVED:
-            p_name = project_map.get(t.project_id, "No Project")
-            status_color = "green" if t.status == TaskStatus.DONE else "yellow"
-            
-            TASK_INDEX_MAP[str(current_index)] = t.id
-            
-            deadline_str = t.deadline or ""
-            deadline_style = ""
-            if t.deadline:
-                try:
-                    due_date = datetime.fromisoformat(t.deadline)
-                    today = datetime.now()
-                    delta = (due_date - today).days
-                    
-                    if delta < 0: # Overdue
-                        deadline_style = "bold red"
-                    elif delta <= 0: # Due today (delta is -1 to 0 roughly depending on time)
-                         # Actually delta days is just date diff. 
-                         # Let's be more precise: compare dates.
-                         if due_date.date() < today.date():
-                             deadline_style = "bold red" # Overdue
-                         elif due_date.date() == today.date():
-                             deadline_style = "bold red" # Due Today
-                         elif delta <= 7:
-                             deadline_style = "yellow"
-                         else:
-                             deadline_style = "green"
-                    elif delta <= 7:
-                        deadline_style = "yellow"
-                    else:
-                        deadline_style = "green"
-                except ValueError:
-                    pass
+    for t in filtered_tasks:
+        p_name = project_map.get(t.project_id, "No Project")
+        status_color = "green" if t.status == TaskStatus.DONE else "yellow"
+        
+        TASK_INDEX_MAP[str(current_index)] = t.id
+        
+        deadline_str = t.deadline or ""
+        deadline_style = ""
+        if t.deadline:
+            try:
+                due_date = datetime.fromisoformat(t.deadline)
+                delta = (due_date - today).days
+                
+                if delta < 0: # Overdue
+                    deadline_style = "bold red"
+                elif delta <= 0: # Due today (delta is -1 to 0 roughly depending on time)
+                     if due_date.date() < today.date():
+                         deadline_style = "bold red" # Overdue
+                     elif due_date.date() == today.date():
+                         deadline_style = "bold red" # Due Today
+                     elif delta <= 7:
+                         deadline_style = "yellow"
+                     else:
+                         deadline_style = "green"
+                elif delta <= 7:
+                    deadline_style = "yellow"
+                else:
+                    deadline_style = "green"
+            except ValueError:
+                pass
 
-            table.add_row(
-                str(current_index),
-                t.id[:8], 
-                t.title, 
-                f"{t.completed_tomatoes}/{t.estimated_tomatoes}", 
-                f"[{status_color}]{t.status.value}[/{status_color}]", 
-                p_name,
-                f"[{deadline_style}]{deadline_str}[/{deadline_style}]" if deadline_style else deadline_str
-            )
-            current_index += 1
+        table.add_row(
+            str(current_index),
+            t.id[:8], 
+            t.title, 
+            f"{t.completed_tomatoes}/{t.estimated_tomatoes}", 
+            f"[{status_color}]{t.status.value}[/{status_color}]", 
+            p_name,
+            f"[{deadline_style}]{deadline_str}[/{deadline_style}]" if deadline_style else deadline_str
+        )
+        current_index += 1
             
     console.print(table)
 
@@ -187,25 +267,78 @@ def start(task_ref: str):
     storage.save_data(tasks, projects)
 
 @app.command()
-def stats():
+def stats(
+    project: Annotated[Optional[str], typer.Option(help="Filter by project name")] = None,
+    due: Annotated[Optional[int], typer.Option(help="Filter by tasks due within X days")] = None,
+    id: Annotated[Optional[str], typer.Option(help="Filter by ID prefix")] = None
+):
     """
     Show progress statistics.
     """
     tasks, projects = storage.load_data()
     
+    # Filter tasks first
+    # Note: filter_tasks excludes archived, but for stats we might want to see completed ones too?
+    # The original stats logic iterated over ALL tasks (including archived? No, load_data returns all).
+    # Original logic:
+    # for t in tasks:
+    #    total_estimated += t.estimated_tomatoes
+    #    total_completed += t.completed_tomatoes
+    
+    # If we use filter_tasks, it excludes ARCHIVED.
+    # Let's use filter_tasks but maybe we want to include done/archived for stats?
+    # Usually stats are for "active" or "all time"?
+    # The original code: "for t in tasks:" -> implies all tasks loaded.
+    # But wait, filter_tasks has "if t.status == TaskStatus.ARCHIVED: continue".
+    # If I want to filter by project, I should probably filter ALL tasks.
+    
+    # Let's make a custom filter loop here or modify filter_tasks to accept a status list?
+    # For simplicity, let's just filter manually here reusing logic or just copy-paste for now to be safe about ARCHIVED.
+    # Actually, if I filter by project "Work", I want to see stats for "Work".
+    
+    filtered_tasks = []
+    project_map = {p.id: p.name for p in projects}
+    today = datetime.now()
+    
+    for t in tasks:
+        # ID Filter
+        if id and not t.id.startswith(id):
+            continue
+            
+        # Project Filter
+        p_name = project_map.get(t.project_id, "No Project")
+        if project and project.lower() not in p_name.lower():
+            continue
+            
+        # Due Filter
+        if due is not None:
+            if not t.deadline:
+                continue
+            try:
+                d = datetime.fromisoformat(t.deadline)
+                if (d - today).days > due:
+                    continue
+            except ValueError:
+                continue
+                
+        filtered_tasks.append(t)
+    
     total_estimated = 0
     total_completed = 0
     
-    # Calculate stats for active tasks
-    for t in tasks:
+    # Calculate stats for filtered tasks
+    for t in filtered_tasks:
         total_estimated += t.estimated_tomatoes
         total_completed += t.completed_tomatoes
         
-    if total_estimated == 0:
-        console.print("[yellow]No tasks found.[/yellow]")
+    if total_estimated == 0 and total_completed == 0:
+        console.print("[yellow]No tasks found matching criteria.[/yellow]")
         return
         
     percentage = (total_completed / total_estimated) * 100 if total_estimated > 0 else 0
+    
+    title_text = "Statistics"
+    if project: title_text += f" | Project: {project}"
     
     console.print(Panel(f"""
     [bold]Total Progress[/bold]
@@ -213,13 +346,12 @@ def stats():
     Completed Tomatoes: [green]{total_completed}[/green]
     Estimated Tomatoes: [blue]{total_estimated}[/blue]
     Progress: [magenta]{percentage:.1f}%[/magenta]
-    """, title="Statistics", border_style="blue"))
+    """, title=title_text, border_style="blue"))
     
     # Breakdown by Project
-    project_map = {p.id: p.name for p in projects}
     project_stats = {}
     
-    for t in tasks:
+    for t in filtered_tasks:
         p_name = project_map.get(t.project_id, "No Project")
         if p_name not in project_stats:
             project_stats[p_name] = {"est": 0, "comp": 0}
@@ -602,13 +734,13 @@ def sync():
             
         for p_name, p_tasks in tasks_by_project.items():
             md_lines.append(f"## {p_name}")
-            md_lines.append("| Status | Title | Tomatoes | Deadline |")
-            md_lines.append("| :--- | :--- | :--- | :--- |")
+            md_lines.append("| ID | Status | Title | Tomatoes | Deadline |")
+            md_lines.append("| :--- | :--- | :--- | :--- | :--- |")
             for t in p_tasks:
                 status_icon = "✅" if t.status == TaskStatus.DONE else "⬜"
                 if t.status == TaskStatus.IN_PROGRESS:
                     status_icon = "🍅"
-                md_lines.append(f"| {status_icon} | {t.title} | {t.completed_tomatoes}/{t.estimated_tomatoes} | {t.deadline or ''} |")
+                md_lines.append(f"| `{t.id[:8]}` | {status_icon} | {t.title} | {t.completed_tomatoes}/{t.estimated_tomatoes} | {t.deadline or ''} |")
             md_lines.append("")
             
         content = "\n".join(md_lines)
@@ -881,38 +1013,64 @@ def interactive():
             text = Prompt.ask("Enter your brain dump")
             ingest(text)
         elif choice == "2":
-            list_tasks()
+            # List with filters
+            filters = prompt_filter_options()
+            list_tasks(**filters)
         elif choice == "3":
-            # List tasks first to see IDs
-            list_tasks()
+            # Start Task - List first (maybe filtered?)
+            # User might want to filter to find the task to start
+            console.print("[dim]Tip: You can filter the list to find your task.[/dim]")
+            filters = prompt_filter_options()
+            list_tasks(**filters)
+            
             task_id = Prompt.ask("Enter Task ID (or prefix)")
             start(task_id)
         elif choice == "4":
-            stats()
+            # Stats with filters
+            filters = prompt_filter_options()
+            stats(**filters)
         elif choice == "5":
-            days = Prompt.ask("Archive tasks older than X days (0 for all)", default="0")
+            days = Prompt.ask("Archive tasks older than X days (0 for all) or 'exit'", default="0")
+            if days.lower() == "exit":
+                console.print("[yellow]Cancelled.[/yellow]")
+                continue
             try:
                 archive(int(days))
             except ValueError:
                 console.print("[red]Invalid number[/red]")
         elif choice == "6":
-            # List tasks first
-            list_tasks()
-            task_refs = Prompt.ask("Enter Task Index(es) or ID(s) to mark done (e.g. 1,2 or 1-3)")
+            # Mark Done - Filter first
+            filters = prompt_filter_options()
+            list_tasks(**filters)
+            
+            task_refs = Prompt.ask("Enter Task Index(es) or ID(s) to mark done (e.g. 1,2 or 1-3) or 'exit'")
+            if task_refs.lower() == "exit":
+                console.print("[yellow]Cancelled.[/yellow]")
+                continue
             complete(task_refs)
         elif choice == "7":
-            # List tasks first
-            list_tasks()
-            task_refs = Prompt.ask("Enter Task Index(es) or ID(s) to delete (e.g. 1,2 or 1-3)")
+            # Delete - Filter first
+            filters = prompt_filter_options()
+            list_tasks(**filters)
+            
+            task_refs = Prompt.ask("Enter Task Index(es) or ID(s) to delete (e.g. 1,2 or 1-3) or 'exit'")
+            if task_refs.lower() == "exit":
+                console.print("[yellow]Cancelled.[/yellow]")
+                continue
             delete(task_refs)
         elif choice == "8":
             check_github()
         elif choice == "9":
             sync()
         elif choice == "10":
-            # List tasks first
-            list_tasks()
-            task_refs = Prompt.ask("Enter Task Index(es) or ID(s) to edit (e.g. 1,2 or 1-3)")
+            # Edit - Filter first
+            filters = prompt_filter_options()
+            list_tasks(**filters)
+            
+            task_refs = Prompt.ask("Enter Task Index(es) or ID(s) to edit (e.g. 1,2 or 1-3) or 'exit'")
+            if task_refs.lower() == "exit":
+                console.print("[yellow]Cancelled.[/yellow]")
+                continue
             edit(task_refs)
         elif choice == "11":
             console.print("[bold blue]Goodbye![/bold blue]")
