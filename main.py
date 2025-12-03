@@ -1,3 +1,15 @@
+import sys
+if sys.version_info < (3, 10):
+    import importlib.metadata
+    import importlib_metadata
+    if not hasattr(importlib.metadata, 'packages_distributions'):
+        importlib.metadata.packages_distributions = importlib_metadata.packages_distributions
+
+import warnings
+# Suppress warnings about Python 3.9 EOL and OpenSSL
+warnings.filterwarnings("ignore", message="You are using a Python version")
+warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
+
 import typer
 import time
 from rich.console import Console
