@@ -108,13 +108,16 @@ def filter_tasks(tasks: list[Task], projects: list, project_filter: Optional[str
         filtered.append(t)
     return filtered
 
-def prompt_filter_options() -> dict:
+def prompt_filter_options() -> Optional[dict]:
     """
     Prompts user for filter options in interactive mode.
-    Returns a dict of kwargs for filter_tasks/commands.
+    Returns a dict of kwargs for filter_tasks/commands, or None if cancelled.
     """
-    console.print("[dim]Filter options: [bold cyan]p[/bold cyan]roject, [bold cyan]d[/bold cyan]ue, [bold cyan]i[/bold cyan]d, or [bold white]Enter[/bold white] for all[/dim]")
+    console.print("[dim]Filter options: [bold cyan]p[/bold cyan]roject, [bold cyan]d[/bold cyan]ue, [bold cyan]i[/bold cyan]d, [bold red]exit[/bold red], or [bold white]Enter[/bold white] for all[/dim]")
     filter_choice = Prompt.ask("Filter?", default="").strip().lower()
+    
+    if filter_choice == "exit":
+        return None
     
     filters = {}
     if filter_choice == 'p':
@@ -569,10 +572,17 @@ def edit(task_refs: str):
         console.print("[green]p[/green]: Project")
         console.print("[red]d[/red]: Deadline")
         console.print("[magenta]t[/magenta]: Tomatoes")
+        console.print("[yellow]s[/yellow]: Status")
+        console.print("[blue]r[/blue]: Priority")
         console.print("[cyan]i[/cyan]: Iterate Titles (rename one by one)")
+        console.print("[bold red]x[/bold red]: Exit")
         
-        choice = Prompt.ask("Choice", choices=["p", "d", "t", "i"])
+        choice = Prompt.ask("Choice", choices=["p", "d", "t", "s", "r", "i", "x"])
         
+        if choice == "x":
+            console.print("[yellow]Cancelled.[/yellow]")
+            return
+
         if choice == "p":
             # List projects
             console.print("Existing Projects:")
@@ -619,6 +629,25 @@ def edit(task_refs: str):
                     t.estimated_tomatoes = val
                 console.print(f"[bold green]Updated tomatoes for {len(target_tasks)} tasks.[/bold green]")
                 
+        elif choice == "s":
+            new_status = Prompt.ask("New Status (todo/in_progress/done/archived)").strip().lower()
+            try:
+                val = TaskStatus(new_status)
+                for t in target_tasks:
+                    t.status = val
+                console.print(f"[bold green]Updated status for {len(target_tasks)} tasks.[/bold green]")
+            except ValueError:
+                console.print(f"[red]Invalid status: {new_status}[/red]")
+
+        elif choice == "r":
+            new_priority = Prompt.ask("New Priority (High/Medium/Low)").strip().capitalize()
+            if new_priority in ["High", "Medium", "Low"]:
+                for t in target_tasks:
+                    t.priority = new_priority
+                console.print(f"[bold green]Updated priority for {len(target_tasks)} tasks.[/bold green]")
+            else:
+                console.print(f"[red]Invalid priority: {new_priority}[/red]")
+
         elif choice == "i":
             for t in target_tasks:
                 console.print(f"Editing: [dim]{t.id[:8]}[/dim]")
@@ -1101,12 +1130,14 @@ def interactive():
         elif choice == "2":
             # List with filters
             filters = prompt_filter_options()
+            if filters is None: continue
             list_tasks(**filters)
         elif choice == "3":
             # Start Task - List first (maybe filtered?)
             # User might want to filter to find the task to start
             console.print("[dim]Tip: You can filter the list to find your task.[/dim]")
             filters = prompt_filter_options()
+            if filters is None: continue
             list_tasks(**filters)
             
             task_id = Prompt.ask("Enter Task ID (or prefix)")
@@ -1114,6 +1145,7 @@ def interactive():
         elif choice == "4":
             # Stats with filters
             filters = prompt_filter_options()
+            if filters is None: continue
             stats(**filters)
         elif choice == "5":
             days = Prompt.ask("Archive tasks older than X days (0 for all) or 'exit'", default="0")
@@ -1127,6 +1159,7 @@ def interactive():
         elif choice == "6":
             # Mark Done - Filter first
             filters = prompt_filter_options()
+            if filters is None: continue
             list_tasks(**filters)
             
             task_refs = Prompt.ask("Enter Task Index(es) or ID(s) to mark done (e.g. 1,2 or 1-3) or 'exit'")
@@ -1137,6 +1170,7 @@ def interactive():
         elif choice == "7":
             # Delete - Filter first
             filters = prompt_filter_options()
+            if filters is None: continue
             list_tasks(**filters)
             
             task_refs = Prompt.ask("Enter Task Index(es) or ID(s) to delete (e.g. 1,2 or 1-3) or 'exit'")
@@ -1151,6 +1185,7 @@ def interactive():
         elif choice == "10":
             # Edit - Filter first
             filters = prompt_filter_options()
+            if filters is None: continue
             list_tasks(**filters)
             
             task_refs = Prompt.ask("Enter Task Index(es) or ID(s) to edit (e.g. 1,2 or 1-3) or 'exit'")
