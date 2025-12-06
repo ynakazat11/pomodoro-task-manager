@@ -35,7 +35,7 @@ def parse_task_refs(task_ref_str: str, tasks: list[Task]) -> list[str]:
     Supports comma-separated values (1,2,3) and ranges (1-3).
     """
     target_ids = []
-    refs = [r.strip() for r in task_ref_str.split(',')]
+    refs = [r.strip() for r in task_ref_str.split(',') if r.strip()]
     
     for ref in refs:
         if '-' in ref and ref.replace('-', '').isdigit():
