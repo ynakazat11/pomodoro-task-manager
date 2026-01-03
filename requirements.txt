@@ -5,3 +5,4 @@ typer
 pytest
 PyGithub
 importlib-metadata
+rumps
