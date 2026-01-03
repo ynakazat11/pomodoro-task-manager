@@ -30,11 +30,23 @@ A task manager with Pomodoro timer that uses Google Gemini for intelligent task 
    ```
 
 3. **Run the Menu Bar App**:
+   
+   **Easiest way** - Double-click the launcher:
+   - In Finder, navigate to the project folder
+   - Double-click `start_menubar.command`
+   - The 🍅 tomato icon will appear in your menu bar!
+   
+   **Or from terminal**:
+   ```bash
+   ./start_menubar.sh
+   ```
+   
+   **Or manually**:
    ```bash
    python menubar_app.py &
    ```
    
-   The 🍅 tomato icon will appear in your menu bar!
+   💡 **Pro tip:** Drag `start_menubar.command` to your Dock for one-click access!
 
 ### Option 2: CLI / Interactive Terminal
 
