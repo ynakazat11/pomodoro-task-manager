@@ -16,7 +16,7 @@ from rich.console import Console
 from rich.table import Table
 from typing import Optional, Annotated
 from datetime import datetime, timedelta
-import gemini_client
+import llm_client
 import storage
 import timer
 import github_client
@@ -554,7 +554,7 @@ def edit(task_refs: str):
                 t.project_id = found_p.id
             else:
                 if typer.confirm(f"Create new project '{new_p_name}'?"):
-                    new_p = gemini_client.Project(
+                    new_p = llm_client.Project(
                         id=f"p_{datetime.now().timestamp()}",
                         name=new_p_name,
                         description="",
@@ -600,7 +600,7 @@ def edit(task_refs: str):
                 target_p_id = found_p.id
             else:
                 if typer.confirm(f"Create new project '{new_p_name}'?"):
-                    new_p = gemini_client.Project(
+                    new_p = llm_client.Project(
                         id=f"p_{datetime.now().timestamp()}",
                         name=new_p_name,
                         description="",
@@ -912,7 +912,7 @@ def ingest_logic(text: str) -> bool:
     """
     console.print("[bold blue]Processing with Gemini...[/bold blue]")
     try:
-        new_tasks, new_projects = gemini_client.process_brain_dump(text)
+        new_tasks, new_projects = llm_client.process_brain_dump(text)
         
         # Load existing data
         existing_tasks, existing_projects = storage.load_data()
@@ -1023,7 +1023,7 @@ def ingest_logic(text: str) -> bool:
                         else:
                             # Create new project?
                             if typer.confirm(f"Create new project '{new_p_name}'?"):
-                                new_p = gemini_client.Project(
+                                new_p = llm_client.Project(
                                     id=f"p_{datetime.now().timestamp()}",
                                     name=new_p_name,
                                     description="",

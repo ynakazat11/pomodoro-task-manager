@@ -1,10 +1,10 @@
 # Pomodoro Task Manager
 
-A task manager with Pomodoro timer that uses Google Gemini for intelligent task parsing. Available as both a **CLI** and **macOS Menu Bar App**.
+A task manager with Pomodoro timer that uses Claude AI for intelligent task parsing. Available as both a **CLI** and **macOS Menu Bar App**.
 
 ## Features
 
-- **🧠 Brain Dump**: Takes a raw text dump of your tasks and uses Gemini to break them down and estimate effort
+- **🧠 Brain Dump**: Takes a raw text dump of your tasks and uses Claude AI to break them down and estimate effort
 - **📋 Smart Organization**: Automatically creates projects and estimates "Tomatoes" (25-minute slots)
 - **⏱️ Pomodoro Timer**: Visual timer for 25-minute focus sessions
 - **📊 Progress Tracking**: View statistics on completed vs. estimated tomatoes
@@ -23,11 +23,12 @@ A task manager with Pomodoro timer that uses Google Gemini for intelligent task 
    pip3 install -r requirements.txt
    ```
 
-2. **Set up Gemini API** (required for Brain Dump):
+2. **Set up Claude API** (required for Brain Dump):
    Create a `.env` file:
    ```
-   GEMINI_API_KEY=your_api_key_here
+   ANTHROPIC_API_KEY=your_api_key_here
    ```
+   Get your API key from https://console.anthropic.com/settings/keys
 
 3. **Run the Menu Bar App**:
    
@@ -65,7 +66,7 @@ python3 main.py
 |---------|-------------|
 | **View Tasks** | Click 🍅 to see all tasks sorted by priority (shows 20, "Show More" for additional) |
 | **Start Timer** | Click any task to start a 25-minute Pomodoro with macOS notifications |
-| **🧠 Brain Dump** | Type tasks naturally → Gemini parses → Review & confirm before saving |
+| **🧠 Brain Dump** | Type tasks naturally → Claude AI parses → Review & confirm before saving |
 | **✅ Mark Done** | Quick-complete tasks from submenu |
 | **✏️ Edit Tasks** | Edit title, priority, deadline via dialogs |
 | **⌨️ GitHub Inbox** | Fetch open issues and convert to tasks |
@@ -91,7 +92,7 @@ To have the menu bar app launch automatically:
 2.  **Environment Variables**:
     Create a `.env` file in the project root:
     ```
-    GEMINI_API_KEY=your_api_key_here
+    ANTHROPIC_API_KEY=your_api_key_here
     GITHUB_TOKEN=your_github_token_here  # Optional, for GitHub features
     GITHUB_REPO=username/repo-name        # Optional, must be PRIVATE
     ```
@@ -112,7 +113,7 @@ make run
 You can still use the CLI commands if you prefer:
 
 ### 1. Ingest Tasks
-Dump your thoughts into the system. Gemini will parse them.
+Dump your thoughts into the system. Claude AI will parse them.
 ```bash
 python3 main.py ingest "I need to finish the quarterly report, call mom, and buy groceries for dinner."
 ```

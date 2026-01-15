@@ -33,10 +33,10 @@ from models import Task, Project, TaskStatus
 
 # Try to import optional modules (may not be configured)
 try:
-    import gemini_client
-    HAS_GEMINI = True
+    import llm_client
+    HAS_LLM = True
 except Exception:
-    HAS_GEMINI = False
+    HAS_LLM = False
 
 try:
     import github_client
@@ -123,7 +123,7 @@ class PomodoroMenuBar(rumps.App):
         self.menu.add(rumps.separator)
         
         # --- Actions ---
-        if HAS_GEMINI:
+        if HAS_LLM:
             self.menu.add(rumps.MenuItem("🧠 Brain Dump", callback=self._brain_dump))
         
         self.menu.add(rumps.MenuItem("⏱️ Quick Timer (25 min)", callback=self._start_quick_timer))
@@ -153,6 +153,33 @@ class PomodoroMenuBar(rumps.App):
             done_menu.add(rumps.MenuItem("No tasks"))
         self.menu.add(done_menu)
         
+        # Remove Completed submenu
+        completed_tasks = [t for t in tasks if t.status == TaskStatus.DONE]
+        remove_menu = rumps.MenuItem("🗑️ Remove Completed...")
+        if completed_tasks:
+            for task in completed_tasks[:INITIAL_LIMIT]:
+                item = rumps.MenuItem(
+                    f"✅ {task.title[:TITLE_WIDTH]}",
+                    callback=self._make_remove_callback(task)
+                )
+                remove_menu.add(item)
+            # Show More in submenu
+            if len(completed_tasks) > INITIAL_LIMIT:
+                remove_more = rumps.MenuItem(f"📂 {len(completed_tasks) - INITIAL_LIMIT} More...")
+                for task in completed_tasks[INITIAL_LIMIT:]:
+                    item = rumps.MenuItem(
+                        f"✅ {task.title[:TITLE_WIDTH]}",
+                        callback=self._make_remove_callback(task)
+                    )
+                    remove_more.add(item)
+                remove_menu.add(remove_more)
+            # Add "Remove All" option
+            remove_menu.add(rumps.separator)
+            remove_menu.add(rumps.MenuItem(f"🗑️ Remove All ({len(completed_tasks)})", callback=self._remove_all_completed))
+        else:
+            remove_menu.add(rumps.MenuItem("No completed tasks"))
+        self.menu.add(remove_menu)
+
         # Edit submenu
         edit_menu = rumps.MenuItem("✏️ Edit Task...")
         if pending_tasks:
@@ -209,6 +236,12 @@ class PomodoroMenuBar(rumps.App):
         """Create a callback to edit a specific task."""
         def callback(sender):
             self._edit_task(task)
+        return callback
+
+    def _make_remove_callback(self, task):
+        """Create a callback to remove a specific completed task."""
+        def callback(sender):
+            self._remove_task(task)
         return callback
     
     # --- Timer Methods ---
@@ -339,6 +372,46 @@ class PomodoroMenuBar(rumps.App):
         except Exception as e:
             rumps.notification("Error", "", str(e)[:100], sound=False)
     
+    def _remove_task(self, task):
+        """Remove a completed task from the list."""
+        try:
+            tasks, projects = storage.load_data()
+            tasks = [t for t in tasks if t.id != task.id]
+            storage.save_data(tasks, projects)
+
+            rumps.notification(
+                "🗑️ Task Removed",
+                task.title[:50],
+                "",
+                sound=False
+            )
+            self._build_menu()
+        except Exception as e:
+            rumps.notification("Error", "", str(e)[:100], sound=False)
+
+    def _remove_all_completed(self, sender):
+        """Remove all completed tasks from the list."""
+        try:
+            tasks, projects = storage.load_data()
+            completed_count = len([t for t in tasks if t.status == TaskStatus.DONE])
+
+            if completed_count == 0:
+                rumps.notification("No Tasks", "", "No completed tasks to remove", sound=False)
+                return
+
+            tasks = [t for t in tasks if t.status != TaskStatus.DONE]
+            storage.save_data(tasks, projects)
+
+            rumps.notification(
+                "🗑️ Tasks Removed",
+                f"{completed_count} completed task(s) removed",
+                "",
+                sound=True
+            )
+            self._build_menu()
+        except Exception as e:
+            rumps.notification("Error", "", str(e)[:100], sound=False)
+
     def _edit_task(self, task):
         """Edit a task via dialog."""
         # Title
@@ -408,12 +481,12 @@ class PomodoroMenuBar(rumps.App):
     
     def _brain_dump(self, sender):
         """LLM-powered task ingestion with confirmation."""
-        if not HAS_GEMINI:
-            rumps.notification("Error", "", "Gemini not configured", sound=False)
+        if not HAS_LLM:
+            rumps.notification("Error", "", "LLM not configured", sound=False)
             return
-        
+
         response = rumps.Window(
-            message="Type your tasks naturally.\nGemini will parse and organize them.",
+            message="Type your tasks naturally.\nAI will parse and organize them.",
             title="🧠 Brain Dump",
             default_text="",
             ok="Process",
@@ -426,13 +499,13 @@ class PomodoroMenuBar(rumps.App):
         
         text = response.text.strip()
         
-        rumps.notification("🧠 Processing...", "", "Sending to Gemini...", sound=False)
+        rumps.notification("🧠 Processing...", "", "Sending to AI...", sound=False)
         
         try:
-            new_tasks, new_projects = gemini_client.process_brain_dump(text)
+            new_tasks, new_projects = llm_client.process_brain_dump(text)
             
             if not new_tasks:
-                rumps.notification("No Tasks", "", "Gemini didn't find any tasks", sound=False)
+                rumps.notification("No Tasks", "", "AI didn't find any tasks", sound=False)
                 return
             
             # Load existing for project mapping
@@ -468,7 +541,7 @@ class PomodoroMenuBar(rumps.App):
             
             # Confirmation dialog
             confirm = rumps.Window(
-                message=f"Tasks parsed by Gemini:\n\n{task_summary}\n\nClick 'Save' to add these tasks, or 'Edit' to modify them first.",
+                message=f"Tasks parsed by AI:\n\n{task_summary}\n\nClick 'Save' to add these tasks, or 'Edit' to modify them first.",
                 title="📋 Confirm Tasks",
                 default_text="",
                 ok="Save",
@@ -547,9 +620,9 @@ class PomodoroMenuBar(rumps.App):
             
             brain_dump_text = "\n".join(brain_dump_lines)
             
-            if HAS_GEMINI:
-                # Process with Gemini
-                new_tasks, new_projects = gemini_client.process_brain_dump(brain_dump_text)
+            if HAS_LLM:
+                # Process with LLM
+                new_tasks, new_projects = llm_client.process_brain_dump(brain_dump_text)
                 
                 existing_tasks, existing_projects = storage.load_data()
                 
@@ -590,7 +663,7 @@ class PomodoroMenuBar(rumps.App):
                 rumps.notification(
                     "📬 Issues Found",
                     f"{len(issues)} issue(s)",
-                    "Configure Gemini to auto-ingest",
+                    "Configure LLM to auto-ingest",
                     sound=False
                 )
                 

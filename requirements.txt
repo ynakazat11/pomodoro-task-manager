@@ -1,4 +1,4 @@
-google-generativeai
+anthropic
 rich
 python-dotenv
 typer
