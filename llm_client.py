@@ -53,22 +53,24 @@ Return ONLY valid JSON. Do not include markdown formatting like ```json ... ```.
 
     try:
         message = client.messages.create(
-            model="claude-sonnet-4-5-20250929",
+            model=os.getenv("EVAL_MODEL_OVERRIDE", "claude-haiku-4-5-20251001"),
             max_tokens=4096,
             messages=[
                 {"role": "user", "content": prompt}
             ]
         )
+        if _log := os.getenv("EVAL_TOKEN_LOG"):
+            with open(_log, "a") as _f:
+                _f.write(json.dumps({"input": message.usage.input_tokens, "output": message.usage.output_tokens, "model": os.getenv("EVAL_MODEL_OVERRIDE", "claude-haiku-4-5-20251001")}) + "\n")
 
         response_text = message.content[0].text.strip()
 
-        # Clean up potential markdown formatting if Claude adds it despite instructions
-        if response_text.startswith("```json"):
-            response_text = response_text[7:]
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]
-
-        data = json.loads(response_text)
+        # Extract JSON object robustly — model sometimes adds prose before/after
+        start = response_text.find("{")
+        end = response_text.rfind("}") + 1
+        if start == -1 or end == 0:
+            raise ValueError(f"No JSON object found in response: {response_text!r}")
+        data = json.loads(response_text[start:end])
 
         projects_map = {}
         projects = []
